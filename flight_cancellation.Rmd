@@ -1,0 +1,102 @@
+---
+title: "Flight Cancellation Analysis--Phase 1"
+author: "Lei Kang"
+date: "Jan 31,2016"
+output: 
+  html_document:
+    theme: spacelab
+    fig_width: 10
+---
+
+```{r echo=FALSE,message=FALSE,include=FALSE, cache=FALSE}
+# setwd("~/Desktop/On-time data") ##need to modify
+library(knitr)
+suppressPackageStartupMessages(library(googleVis))
+library(googleVis)
+library(dplyr)
+library(shiny)
+library(binom)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(scales)
+library(googleVis)
+op <- options(gvis.plot.tag = "chart")
+options(warn=-1)
+```
+
+```{r echo=FALSE}
+## Load Data
+data.airline_cancel <- read.csv("airlinedata.csv",header=T)
+data.group_scat<-read.csv("scatter.csv",header = T)
+data.group_general<-read.csv("general.csv",header = T)
+```
+
+## Introduction
+When planning travels, especially in the phase of booking flights, it would be good for a customer to know the likelihood of his/her flight being cancelled. This useful information will help customers better plan their trips. To this end, the objectives of this project are twofolds: (1) analyze airline flight cancellation patterns and (2) develop prediction models for flight cancellation. In this Phase 1 post, exploratory data analysis will be conducted to summarize and detect patterns of flight cancellation by airlines using the U.S. domestic flights data from 2010 to 2015. In Phase 2, I will focus on the development of prediction models in terms of predicintg the likelihood of a flight being cancelled. As more variables keep coming in, ensemble methods (e.g.random forests and boosting) and SVM could also be used. Flight-level data can be found in [my Github](https://github.com/leikang-stat/DI-Data).
+
+
+## Data Description
+Historical airline cancellation data is taken from the Bureau of Transportation Statistics (BTS), called [Airline On-Time Performance Data](http://www.transtats.bts.gov/Tables.asp?DB_ID=120) for all dates from 2010 to 2015, resulting in about 36 million U.S. domestic flights. This data provides a large pool of cancellation decisions across different airlines. In Phase 2, airfare data obtained from the [BTS Airline Origin & Destination survey](http://www.transtats.bts.gov/Tables.asp?DB_ID=12 ) and airport weather data obtained from the [FAA Aviation System Performance Metrics ](https://aspm.faa.gov/) will also be included. But as for now, I will focus on the BTS Airline On-Time Performance Data. Though cancelled flights only account for about 2% of total domestic operations, its absolute magnitude is still significant: about 0.1 million flights got cancelled every year. Therefore, it is necessary to look into this question deeply and help travlers avoid disruptive trips. 
+
+```{r fig.width=5, fig.height=4,echo=FALSE}
+ggplot(data = data.group_general, aes(x=YEAR, y=c_rate*100,ymax = 1.05*max(c_rate*100), label = cancel)) + geom_bar(stat = "identity", position = "dodge",colour="blue") + ylab("Cancellation Percentage (%)") + geom_text(aes(y=c_rate*100+0.1),position = position_dodge(0.9), vjust = 0)
+```
+
+## Exploratory Data Analysis
+
+### Cancellation Trends by Carriers
+Let's look at daily trends of flight cancellation across different airlines. Among legacy carriers, American Airlines is found to have higher cancellation rate (defined as number of flights being cancelled divid by total number of flights). For the other three legacy carriers, similar periodic cancellation patterns could be identified. Winter season is found to enjoy consistent high cancellation rates.  
+
+```{r legacy time series,results='asis',echo=FALSE}
+p<-list()
+legacy_airline<-c("American","Delta","United","US Airways")
+for (i in 1:4){
+  p[[i]] = ggplot(data = data.airline_cancel[data.airline_cancel$airline==legacy_airline[i],], aes(x = as.POSIXct(strptime(date,"%Y-%m-%d")), y = c_rate) )+ geom_line()+ ylim (0,0.65) + xlab(legacy_airline[i]) + ylab("Cancellation Rate")
+  
+  p[[i]] + scale_x_datetime(labels = date_format("%Y"), breaks = date_breaks("years")) + theme(axis.text.x = element_text(angle = 45)) 
+}
+grid.arrange(p[[1]], p[[2]], p[[3]],p[[4]],nrow = 2, main = "Legacy Carriers")
+```
+
+Turning to low-cost carriers, four airlines are presented below. Similar seasonal cancellation patterns are also found in ExpressJet and JetBlue where winter seasons usually witness bad operation disruption. Southwest and Skywest are found to exhibit overall good performance in terms of avoiding flight cancellation. Surprisingly, low-cost carriers do not have lower cancellation rates than legacy carriers, sometimes even worse than legacy carriers. This result suggests that airlines tend to favour high-fare flights and they are growing more sophisticated in how they evaluate and prioritise passenger delays under duress—and discount passengers may be at a disadvantage. One evidence is that low-cost carriers have lower cost in cancelling flights than legacy carriers, thus having higher cancellation rates.
+
+```{r airline time series,results='asis',echo=FALSE}
+l<-list()
+lowcost_airline<-c("Southwest","JetBlue","ExpressJet","Skywest")
+for (i in 1:4){
+  l[[i]] = ggplot(data = data.airline_cancel[data.airline_cancel$airline==lowcost_airline[i],], aes(x = as.POSIXct(strptime(date,"%Y-%m-%d")), y = c_rate) )+ geom_line()+ ylim (0,0.65) + xlab(lowcost_airline[i]) + ylab("Cancellation Rate")
+  
+  l[[i]] + scale_x_datetime(labels = date_format("%Y"), breaks = date_breaks("years")) + theme(axis.text.x = element_text(angle = 45)) 
+}
+grid.arrange(l[[1]], l[[2]], l[[3]],l[[4]],ncol = 2, main = "Low-Cost Carriers")
+
+```
+
+### Cancellation Trends over Distance
+
+We have demonstrated that different airlines may have different flight cancellation strategies. Now, let's look at how cancellation rates are associated with flight distance (scheduled minutes) across airlines. Instead of aggregating by days, I apply aggregation by airline-origin airport-destination airport. Based on the following plot, we can see that most cancellations occur among short-haul flights (50-100 minutes). Long haul flights will be less likely to be cancelled. Note that ExpressJet and JetBlue still suffer from high cancellation rates which is consistent with previous plots, though aggregated in a different way.
+
+```{r cancel distance,results='asis',echo=FALSE}
+data.group_scat<-filter(data.group_scat,UNIQUE_CARRIER=="AA" |UNIQUE_CARRIER=="DL"|UNIQUE_CARRIER=="UA"|UNIQUE_CARRIER=="US"|UNIQUE_CARRIER=="OO"|UNIQUE_CARRIER=="WN"|UNIQUE_CARRIER=="B6"|UNIQUE_CARRIER=="EV")
+
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "AA"] <- "American"
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "DL"] <- "Delta"
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "UA"] <- "United"
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "US"] <- "US Airways"
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "OO"] <- "Skywest"
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "WN"] <- "Southwest"
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "B6"] <- "JetBlue"
+data.group_scat$airline[data.group_scat$UNIQUE_CARRIER == "EV"] <- "ExpressJet"
+
+# data.group_scat<-filter(data.group_scat,count>20)
+
+p = ggplot(data = data.group_scat, aes(x = distance, y = c_rate,colour=factor(airline)))+ geom_point(alpha = 0.4) + xlab("Distance (Min)") + ylab("Cancellation Rate") + ylim(0,0.3)
+p
+```
+
+## Next
+To summarize Phase 1 analysis, different airlines are found to exhibit different flight cancellatioin strategies. Furthermore, flight cancellation is found to be negativelly associated with distance and reflects seasonal patterns. Among legacy carriers, American Airlines is found to have relative higher cancellatioin rates. Whereas among low-cost carriers, ExpressJet and JetBlue witness more cancellations. Later on in Phase 2, I will augment the current dataset by merging it with ASPM weather data and DB1B airfare data. Then flight cancellation prediction models will be developed using SVM and ensemble methods like boosting and random forests.
+
+
+
